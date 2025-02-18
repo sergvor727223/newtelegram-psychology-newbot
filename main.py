@@ -6,6 +6,7 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 from openai import AsyncOpenAI  # Используем асинхронный клиент OpenAI
+from aiogram.filters import Command
 
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -44,7 +45,7 @@ async def send_log_to_telegram(user: str, user_message: str, bot_response: str):
     except Exception as e:
         logger.error(f"Ошибка лога: {e}", exc_info=True)
 
-@dp.message(Commands=("start"))
+@dp.message(Command("start"))
 async def send_welcome(message: types.Message):
     """Обработчик /start"""
     try:
