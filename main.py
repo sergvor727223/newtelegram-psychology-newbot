@@ -120,7 +120,7 @@ def main():
     # Регистрация хука
     app["bot"] = bot
     app["dp"] = dp
-    TokenBasedRequestHandler(dp, bot).register(app, path=f"/bot{TELEGRAM_TOKEN}")
+    TokenBasedRequestHandler(dp, bot).register(app, path=f"/{TELEGRAM_TOKEN}")
     setup_application(app, dp)
 
     # Установка lifecycle-хендлеров
