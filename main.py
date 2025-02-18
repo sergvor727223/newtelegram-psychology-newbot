@@ -44,7 +44,7 @@ async def send_log_to_telegram(user: str, user_message: str, bot_response: str):
     except Exception as e:
         logger.error(f"Ошибка лога: {e}", exc_info=True)
 
-@dp.message(commands=['start'])
+@dp.message(Commands=("start"))
 async def send_welcome(message: types.Message):
     """Обработчик /start"""
     try:
