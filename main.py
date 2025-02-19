@@ -102,37 +102,53 @@ async def handle_message(message: types.Message):
 
 async def on_startup(app: web.Application):
     """Настройка вебхука при запуске"""
+    webhook_path = "/webhook"
+    webhook_url = WEBHOOK_URL.rstrip('/') + webhook_path
+    
     await bot.set_webhook(
-        url=f"{WEBHOOK_URL}/webhook",
+        url=webhook_url,
         drop_pending_updates=True
     )
-    logger.info("Бот запущен через вебхук")
+    logger.info(f"Установлен вебхук: {webhook_url}")
 
 async def on_shutdown(app: web.Application):
     """Очистка при завершении"""
     await bot.delete_webhook()
-    logger.info("Вебхук удален")
+    await bot.session.close()
+    logger.info("Бот остановлен")
 
 def main():
     """Основной запуск приложения"""
     app = web.Application()
     
-    # Регистрация хука
-    app["bot"] = bot
-    app["dp"] = dp
-    TokenBasedRequestHandler(dp, bot).register(app, path=f"/{TELEGRAM_TOKEN}")
+    # Настройка маршрутизации
+    webhook_requests_handler = TokenBasedRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        secret_token=TELEGRAM_TOKEN
+    )
+    webhook_requests_handler.register(app, path="/webhook")
+    
+    # Настройка приложения
     setup_application(app, dp)
-
-    # Установка lifecycle-хендлеров
-    app.cleanup_ctx.append(on_startup)
-    app.cleanup_ctx.append(on_shutdown)
-
-    # Запуск сервера
+    
+    # Регистрация хендлеров
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    
+    # Получение порта из переменных окружения
+    port = int(os.environ.get("PORT", 10000))
+    
+    # Запуск приложения
     web.run_app(
         app,
         host="0.0.0.0",
-        port=int(os.environ.get("PORT", 10000))  # Render использует динамический порт
+        port=port
     )
+    logger.info(f"Сервер запущен на порту {port}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logger.error(f"Критическая ошибка: {e}", exc_info=True)
