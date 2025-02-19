@@ -126,7 +126,7 @@ def main():
         dispatcher=dp,
         bot=bot
     )
-    webhook_requests_handler.register(app, path=f"/bot{bot.token}")
+    webhook_requests_handler.register(app, path=f"/bot{TELEGRAM_TOKEN}")
     
     # Настройка приложения
     setup_application(app, dp)
