@@ -137,7 +137,7 @@ def main():
     app.on_shutdown.append(on_shutdown)
     
     # Получение порта из переменных окружения
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8080))
     
     # Запуск приложения
     web.run_app(
