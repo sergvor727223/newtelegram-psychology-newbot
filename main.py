@@ -102,7 +102,7 @@ async def handle_message(message: types.Message):
 
 async def on_startup(app: web.Application):
     """Настройка вебхука при запуске"""
-    webhook_path = "/webhook"
+    webhook_path = f"/bot{bot.token}"
     webhook_url = WEBHOOK_URL.rstrip('/') + webhook_path
     
     await bot.set_webhook(
@@ -124,17 +124,16 @@ def main():
     # Настройка маршрутизации
     webhook_requests_handler = TokenBasedRequestHandler(
         dispatcher=dp,
-        bot=bot,
-        secret_token=TELEGRAM_TOKEN
+        bot=bot
     )
-    webhook_requests_handler.register(app, path="/webhook")
+    webhook_requests_handler.register(app, path=f"/bot{bot.token}")
     
     # Настройка приложения
     setup_application(app, dp)
     
     # Регистрация хендлеров
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
+    app.cleanup_ctx.append(on_startup)
+    app.cleanup_ctx.append(on_shutdown)
     
     # Получение порта из переменных окружения
     port = int(os.environ.get("PORT", 8080))
