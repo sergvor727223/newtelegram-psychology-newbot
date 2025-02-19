@@ -16,6 +16,10 @@ sys.stdout.reconfigure(encoding='utf-8')
 from config import TELEGRAM_TOKEN, OPENAI_API_KEY, LOG_BOT_TOKEN, LOG_CHAT_ID, WEBHOOK_URL
 from system_prompt import SYSTEM_PROMPT
 
+# Проверяем, что URL вебхука указан
+if not WEBHOOK_URL:
+    raise ValueError("WEBHOOK_URL не задан! Укажите его в переменных окружения.")
+
 # Настройка логов
 logging.basicConfig(
     level=logging.INFO,
@@ -66,7 +70,6 @@ async def send_welcome(message: types.Message):
 async def handle_message(message: types.Message):
     """Основной обработчик сообщений"""
     try:
-        # Асинхронный запрос к OpenAI
         response = await client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -79,14 +82,12 @@ async def handle_message(message: types.Message):
         
         bot_response = response.choices[0].message.content.strip()
         
-        # Отправка логов
         await send_log_to_telegram(
             message.from_user.username, 
             message.text, 
             bot_response
         )
 
-        # Разбиение длинных сообщений
         if len(bot_response) > 4000:
             for chunk in [bot_response[i:i+4000] for i in range(0, len(bot_response), 4000)]:
                 await message.answer(html_decoration.quote(chunk), parse_mode="HTML")
@@ -126,8 +127,8 @@ def main():
         dispatcher=dp,
         bot=bot
     )
-    webhook_requests_handler.register(app, path=f"/bot{TELEGRAM_TOKEN}")
-    
+    webhook_requests_handler.register(app, path=f"/bot{bot.token}")  # Исправлено
+
     # Настройка приложения
     setup_application(app, dp)
     
