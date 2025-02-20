@@ -14,7 +14,6 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 # Импорт конфигураций
 from config import TELEGRAM_TOKEN, OPENAI_API_KEY, LOG_BOT_TOKEN, LOG_CHAT_ID, WEBHOOK_URL
-from system_prompt import SYSTEM_PROMPT
 
 # Проверяем, что URL вебхука указан
 if not WEBHOOK_URL:
@@ -33,8 +32,12 @@ logger = logging.getLogger(__name__)
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TELEGRAM_TOKEN)
-dp = Dispatcher(storage=MemoryStorage())
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Создание экземпляра приложения здесь, чтобы он был доступен глобально
+app = web.Application()
 
 async def send_log_to_telegram(user: str, user_message: str, bot_response: str):
     """Асинхронная отправка логов в Telegram"""
@@ -101,6 +104,10 @@ async def handle_message(message: types.Message):
         await message.answer(error_message)
         logger.error(f"Ошибка OpenAI: {e}")
 
+# Создаем простой health check endpoint
+async def health_check(request):
+    return web.Response(text="OK", status=200)
+
 async def on_startup(app: web.Application):
     """Настройка вебхука при запуске"""
     webhook_path = "/webhook"
@@ -131,10 +138,11 @@ async def on_shutdown(app: web.Application):
 
 def main():
     """Основной запуск приложения"""
-    app = web.Application()
-    
     try:
-        # Настройка маршрутизации
+        # Добавляем health check endpoint
+        app.router.add_get("/", health_check)
+        
+        # Настройка маршрутизации для вебхука
         webhook_requests_handler = TokenBasedRequestHandler(
             dispatcher=dp,
             bot=bot
