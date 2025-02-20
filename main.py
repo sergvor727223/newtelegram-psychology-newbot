@@ -103,52 +103,68 @@ async def handle_message(message: types.Message):
 
 async def on_startup(app: web.Application):
     """Настройка вебхука при запуске"""
-    webhook_path = f"/bot{bot.token}"
+    webhook_path = "/webhook"
     webhook_url = WEBHOOK_URL.rstrip('/') + webhook_path
     
-    await bot.set_webhook(
-        url=webhook_url,
-        drop_pending_updates=True
-    )
-    logger.info(f"Установлен вебхук: {webhook_url}")
+    logger.info(f"Настройка вебхука...")
+    logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
+    logger.info(f"Полный URL вебхука: {webhook_url}")
+    
+    try:
+        await bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True
+        )
+        logger.info(f"Вебхук успешно установлен")
+    except Exception as e:
+        logger.error(f"Ошибка установки вебхука: {e}")
+        raise
 
 async def on_shutdown(app: web.Application):
     """Очистка при завершении"""
-    await bot.delete_webhook()
-    await bot.session.close()
-    logger.info("Бот остановлен")
+    try:
+        await bot.delete_webhook()
+        await bot.session.close()
+        logger.info("Бот остановлен")
+    except Exception as e:
+        logger.error(f"Ошибка при остановке бота: {e}")
 
 def main():
     """Основной запуск приложения"""
     app = web.Application()
     
-    # Настройка маршрутизации
-    webhook_requests_handler = TokenBasedRequestHandler(
-        dispatcher=dp,
-        bot=bot
-    )
-    webhook_requests_handler.register(app, path=f"/bot{bot.token}")  # Исправлено
-
-    # Настройка приложения
-    setup_application(app, dp)
-    
-    # Регистрация хендлеров
-    app.cleanup_ctx.append(on_startup)
-    app.cleanup_ctx.append(on_shutdown)
-    
-    # Получение порта из переменных окружения
-    port = int(os.environ.get("PORT", 8080))
-    
-    # Запуск приложения
-    web.run_app(
-        app,
-        host="0.0.0.0",
-        port=port
-    )
-    logger.info(f"Сервер запущен на порту {port}")
+    try:
+        # Настройка маршрутизации
+        webhook_requests_handler = TokenBasedRequestHandler(
+            dispatcher=dp,
+            bot=bot
+        )
+        webhook_requests_handler.register(app, path="/webhook")
+        
+        # Настройка приложения
+        setup_application(app, dp)
+        
+        # Регистрация хендлеров
+        app.on_startup.append(on_startup)
+        app.on_shutdown.append(on_shutdown)
+        
+        # Получение порта из переменных окружения
+        port = int(os.environ.get("PORT", 8080))
+        logger.info(f"Используется порт: {port}")
+        
+        # Запуск приложения
+        web.run_app(
+            app,
+            host="0.0.0.0",
+            port=port
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при запуске приложения: {e}")
+        raise
 
 if __name__ == "__main__":
     try:
+        logger.info("Запуск бота...")
         main()
     except Exception as e:
         logger.error(f"Критическая ошибка: {e}", exc_info=True)
