@@ -36,7 +36,7 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# Создание экземпляра приложения здесь, чтобы он был доступен глобально
+# Создание экземпляра приложения
 app = web.Application()
 
 async def send_log_to_telegram(user: str, user_message: str, bot_response: str):
@@ -104,14 +104,15 @@ async def handle_message(message: types.Message):
         await message.answer(error_message)
         logger.error(f"Ошибка OpenAI: {e}")
 
-# Создаем простой health check endpoint
 async def health_check(request):
+    """Проверка работоспособности сервиса"""
     return web.Response(text="OK", status=200)
 
 async def on_startup(app: web.Application):
     """Настройка вебхука при запуске"""
-    webhook_path = "/webhook"
-    webhook_url = WEBHOOK_URL.rstrip('/') + webhook_path
+    # Формируем путь для вебхука, включая токен бота
+    webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
+    webhook_url = f"{WEBHOOK_URL.rstrip('/')}{webhook_path}"
     
     logger.info(f"Настройка вебхука...")
     logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
@@ -145,9 +146,10 @@ def main():
         # Настройка маршрутизации для вебхука
         webhook_requests_handler = TokenBasedRequestHandler(
             dispatcher=dp,
-            bot=bot
+            bot=bot,
+            secret_token=TELEGRAM_TOKEN  # Добавляем токен для безопасности
         )
-        webhook_requests_handler.register(app, path="/webhook")
+        webhook_requests_handler.register(app, path=f"/webhook/{TELEGRAM_TOKEN}")
         
         # Настройка приложения
         setup_application(app, dp)
