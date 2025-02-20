@@ -2,60 +2,52 @@ import os
 import logging
 import sys
 from datetime import datetime
-from aiogram import Bot, Dispatcher, types
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.webhook.aiohttp_server import TokenBasedRequestHandler, setup_application
+from aiogram import Bot, Dispatcher, Router, types, F
+from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart
+from aiogram.types import Message
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from aiohttp import web
 from openai import AsyncOpenAI
-from aiogram.filters import Command
-from aiogram.utils.text_decorations import html_decoration
 
-sys.stdout.reconfigure(encoding='utf-8')
-
-# Импорт конфигураций
-from config import TELEGRAM_TOKEN, OPENAI_API_KEY, LOG_BOT_TOKEN, LOG_CHAT_ID, WEBHOOK_URL
-
-# Проверяем, что URL вебхука указан
-if not WEBHOOK_URL:
-    raise ValueError("WEBHOOK_URL не задан! Укажите его в переменных окружения.")
-
-# Настройка логов
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('bot.log'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Базовая настройка логирования
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Загрузка переменных окружения
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+LOG_BOT_TOKEN = os.getenv("LOG_BOT_TOKEN")
+LOG_CHAT_ID = os.getenv("LOG_CHAT_ID")
+WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+
 # Инициализация бота и диспетчера
-bot = Bot(token=TELEGRAM_TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+bot = Bot(token=TELEGRAM_TOKEN, parse_mode=ParseMode.HTML)
+dp = Dispatcher()
+router = Router()
+dp.include_router(router)
 
-# Создание экземпляра приложения
-app = web.Application()
+# Инициализация OpenAI клиента
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-async def send_log_to_telegram(user: str, user_message: str, bot_response: str):
-    """Асинхронная отправка логов в Telegram"""
+async def send_log_to_telegram(user_info: str, user_message: str, bot_response: str) -> None:
+    """Отправка логов в Telegram канал"""
     try:
         async with Bot(token=LOG_BOT_TOKEN) as log_bot:
             log_message = (
-                f"Пользователь: {user}\n"
-                f"Время: {datetime.now()}\n\n"
-                f"Запрос:\n{user_message}\n\n"
-                f"Ответ:\n{bot_response}"
+                f"👤 Пользователь: {user_info}\n"
+                f"⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"📥 Запрос:\n{user_message}\n\n"
+                f"📤 Ответ:\n{bot_response}"
             )
             await log_bot.send_message(LOG_CHAT_ID, log_message)
-            logger.info(f"Лог для {user} отправлен")
+            logger.info(f"Лог отправлен для пользователя {user_info}")
     except Exception as e:
-        logger.error(f"Ошибка лога: {e}", exc_info=True)
+        logger.error(f"Ошибка отправки лога: {e}")
 
-@dp.message(Command("start"))
-async def send_welcome(message: types.Message):
+@router.message(CommandStart())
+async def command_start(message: Message) -> None:
     """Обработчик команды /start"""
     try:
         welcome_text = (
@@ -65,116 +57,115 @@ async def send_welcome(message: types.Message):
             "Я слушаю тебя, говори."
         )
         await message.answer(welcome_text)
-        logger.info(f"Пользователь {message.from_user.username} запустил бота")
+        
+        # Логируем начало общения
+        user_info = f"{message.from_user.full_name} (@{message.from_user.username})" if message.from_user.username else message.from_user.full_name
+        await send_log_to_telegram(user_info, "/start", welcome_text)
+        
     except Exception as e:
-        logger.error(f"Ошибка /start: {e}")
+        logger.error(f"Ошибка в command_start: {e}")
 
-@dp.message()
-async def handle_message(message: types.Message):
-    """Основной обработчик сообщений"""
+@router.message(F.text)
+async def handle_message(message: Message) -> None:
+    """Обработчик текстовых сообщений"""
     try:
-        response = await client.chat.completions.create(
+        # Получаем информацию о пользователе
+        user_info = f"{message.from_user.full_name} (@{message.from_user.username})" if message.from_user.username else message.from_user.full_name
+        
+        # Создаем запрос к OpenAI
+        response = await openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": message.text}
             ],
-            max_tokens=1000,
-            temperature=0.7
+            max_tokens=1000
         )
         
-        bot_response = response.choices[0].message.content.strip()
+        # Получаем ответ
+        response_text = response.choices[0].message.content.strip()
         
-        await send_log_to_telegram(
-            message.from_user.username, 
-            message.text, 
-            bot_response
-        )
-
-        if len(bot_response) > 4000:
-            for chunk in [bot_response[i:i+4000] for i in range(0, len(bot_response), 4000)]:
-                await message.answer(html_decoration.quote(chunk), parse_mode="HTML")
+        # Отправляем ответ пользователю
+        if len(response_text) > 4000:
+            # Разбиваем длинные сообщения на части
+            chunks = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
+            for chunk in chunks:
+                await message.answer(chunk)
+            # Логируем полный ответ
+            await send_log_to_telegram(user_info, message.text, response_text)
         else:
-            await message.answer(html_decoration.quote(bot_response), parse_mode="HTML")
+            await message.answer(response_text)
+            # Логируем ответ
+            await send_log_to_telegram(user_info, message.text, response_text)
             
-        logger.info(f"Обработано сообщение от {message.from_user.username}")
-
     except Exception as e:
-        error_message = "Извините, возникли проблемы с обработкой вашего запроса. Пожалуйста, попробуйте позже."
+        error_message = "Извините, произошла ошибка. Попробуйте позже."
         await message.answer(error_message)
-        logger.error(f"Ошибка OpenAI: {e}")
+        logger.error(f"Ошибка в handle_message: {e}")
+        # Логируем ошибку
+        if 'user_info' in locals():
+            await send_log_to_telegram(user_info, message.text, f"ERROR: {str(e)}")
 
-async def health_check(request):
-    """Проверка работоспособности сервиса"""
-    return web.Response(text="OK", status=200)
-
-async def on_startup(app: web.Application):
-    """Настройка вебхука при запуске"""
-    # Формируем путь для вебхука, включая токен бота
-    webhook_path = f"/webhook/{TELEGRAM_TOKEN}"
-    webhook_url = f"{WEBHOOK_URL.rstrip('/')}{webhook_path}"
-    
-    logger.info(f"Настройка вебхука...")
-    logger.info(f"WEBHOOK_URL: {WEBHOOK_URL}")
-    logger.info(f"Полный URL вебхука: {webhook_url}")
-    
-    try:
-        await bot.set_webhook(
-            url=webhook_url,
-            drop_pending_updates=True
-        )
-        logger.info(f"Вебхук успешно установлен")
-    except Exception as e:
-        logger.error(f"Ошибка установки вебхука: {e}")
-        raise
-
-async def on_shutdown(app: web.Application):
-    """Очистка при завершении"""
-    try:
-        await bot.delete_webhook()
-        await bot.session.close()
-        logger.info("Бот остановлен")
-    except Exception as e:
-        logger.error(f"Ошибка при остановке бота: {e}")
-
-def main():
-    """Основной запуск приложения"""
-    try:
-        # Добавляем health check endpoint
-        app.router.add_get("/", health_check)
+async def on_startup(bot: Bot) -> None:
+    """Действия при запуске бота"""
+    if WEBHOOK_URL:
+        webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
+        logger.info(f"Setting webhook URL to: {webhook_url}")
+        await bot.set_webhook(webhook_url)
+        logger.info("Webhook has been set")
         
-        # Настройка маршрутизации для вебхука
-        webhook_requests_handler = TokenBasedRequestHandler(
+        # Отправляем уведомление о запуске бота
+        try:
+            async with Bot(token=LOG_BOT_TOKEN) as log_bot:
+                await log_bot.send_message(
+                    LOG_CHAT_ID,
+                    f"🚀 Бот запущен\n⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+        except Exception as e:
+            logger.error(f"Ошибка отправки уведомления о запуске: {e}")
+
+async def on_shutdown(bot: Bot) -> None:
+    """Действия при остановке бота"""
+    await bot.session.close()
+    logger.info("Bot shutdown complete")
+    
+    # Отправляем уведомление о остановке бота
+    try:
+        async with Bot(token=LOG_BOT_TOKEN) as log_bot:
+            await log_bot.send_message(
+                LOG_CHAT_ID,
+                f"🔴 Бот остановлен\n⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления о остановке: {e}")
+
+def main() -> None:
+    """Основная функция запуска бота"""
+    try:
+        # Создаем приложение
+        app = web.Application()
+        
+        # Настраиваем вебхук хендлер
+        SimpleRequestHandler(
             dispatcher=dp,
             bot=bot,
-            secret_token=TELEGRAM_TOKEN  # Добавляем токен для безопасности
-        )
-        webhook_requests_handler.register(app, path=f"/webhook/{TELEGRAM_TOKEN}")
+        ).register(app, path=WEBHOOK_PATH)
         
-        # Настройка приложения
-        setup_application(app, dp)
+        # Добавляем маршрут для проверки здоровья
+        app.router.add_get("/", lambda request: web.Response(text="OK"))
         
-        # Регистрация хендлеров
-        app.on_startup.append(on_startup)
-        app.on_shutdown.append(on_shutdown)
+        # Настраиваем хуки запуска и остановки
+        app.on_startup.append(lambda app: on_startup(bot))
+        app.on_shutdown.append(lambda app: on_shutdown(bot))
         
-        # Получение порта из переменных окружения
-        port = int(os.environ.get("PORT", 8080))
-        logger.info(f"Используется порт: {port}")
+        # Получаем порт из переменных окружения
+        port = int(os.getenv("PORT", 8080))
         
-        # Запуск приложения
-        web.run_app(
-            app,
-            host="0.0.0.0",
-            port=port
-        )
+        # Запускаем приложение
+        web.run_app(app, host="0.0.0.0", port=port)
+        
     except Exception as e:
-        logger.error(f"Ошибка при запуске приложения: {e}")
-        raise
+        logger.error(f"Critical error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    try:
-        logger.info("Запуск бота...")
-        main()
-    except Exception as e:
-        logger.error(f"Критическая ошибка: {e}", exc_info=True)
+    main()
