@@ -1,6 +1,7 @@
 import os
 import logging
 import sys
+import asyncio
 from datetime import datetime
 from aiogram import Bot, Dispatcher, Router, types, F
 from aiogram.enums import ParseMode
@@ -14,13 +15,20 @@ from openai import AsyncOpenAI
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Проверка обязательных переменных окружения
+required_env_vars = ["TELEGRAM_TOKEN", "OPENAI_API_KEY", "WEBHOOK_URL", "LOG_BOT_TOKEN", "LOG_CHAT_ID"]
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    logger.error(f"Отсутствуют обязательные переменные окружения: {', '.join(missing_vars)}")
+    sys.exit(1)
+
 # Загрузка переменных окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL").rstrip('/')
 LOG_BOT_TOKEN = os.getenv("LOG_BOT_TOKEN")
 LOG_CHAT_ID = os.getenv("LOG_CHAT_ID")
-WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
+WEBHOOK_PATH = "/webhook"  # Упрощённый путь
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TELEGRAM_TOKEN, parse_mode=ParseMode.HTML)
@@ -58,7 +66,6 @@ async def command_start(message: Message) -> None:
         )
         await message.answer(welcome_text)
         
-        # Логируем начало общения
         user_info = f"{message.from_user.full_name} (@{message.from_user.username})" if message.from_user.username else message.from_user.full_name
         await send_log_to_telegram(user_info, "/start", welcome_text)
         
@@ -69,51 +76,41 @@ async def command_start(message: Message) -> None:
 async def handle_message(message: Message) -> None:
     """Обработчик текстовых сообщений"""
     try:
-        # Получаем информацию о пользователе
         user_info = f"{message.from_user.full_name} (@{message.from_user.username})" if message.from_user.username else message.from_user.full_name
         
-        # Создаем запрос к OpenAI
         response = await openai_client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "user", "content": message.text}
-            ],
+            messages=[{"role": "user", "content": message.text}],
             max_tokens=1000
         )
         
-        # Получаем ответ
         response_text = response.choices[0].message.content.strip()
         
-        # Отправляем ответ пользователю
         if len(response_text) > 4000:
-            # Разбиваем длинные сообщения на части
             chunks = [response_text[i:i+4000] for i in range(0, len(response_text), 4000)]
             for chunk in chunks:
                 await message.answer(chunk)
-            # Логируем полный ответ
+                await asyncio.sleep(1)  # Задержка между сообщениями
             await send_log_to_telegram(user_info, message.text, response_text)
         else:
             await message.answer(response_text)
-            # Логируем ответ
             await send_log_to_telegram(user_info, message.text, response_text)
             
     except Exception as e:
         error_message = "Извините, произошла ошибка. Попробуйте позже."
         await message.answer(error_message)
+        # Повторно получаем user_info для логов
+        user_info = f"{message.from_user.full_name} (@{message.from_user.username})" if message.from_user.username else message.from_user.full_name
         logger.error(f"Ошибка в handle_message: {e}")
-        # Логируем ошибку
-        if 'user_info' in locals():
-            await send_log_to_telegram(user_info, message.text, f"ERROR: {str(e)}")
+        await send_log_to_telegram(user_info, message.text, f"ERROR: {str(e)}")
 
 async def on_startup(bot: Bot) -> None:
     """Действия при запуске бота"""
     if WEBHOOK_URL:
-        webhook_url = f"{WEBHOOK_URL.rstrip('/')}{WEBHOOK_PATH}"
-        logger.info(f"Setting webhook URL to: {webhook_url}")
+        webhook_url = f"{WEBHOOK_URL}{WEBHOOK_PATH}"
+        logger.info(f"Устанавливаю вебхук: {webhook_url}")
         await bot.set_webhook(webhook_url)
-        logger.info("Webhook has been set")
         
-        # Отправляем уведомление о запуске бота
         try:
             async with Bot(token=LOG_BOT_TOKEN) as log_bot:
                 await log_bot.send_message(
@@ -121,14 +118,13 @@ async def on_startup(bot: Bot) -> None:
                     f"🚀 Бот запущен\n⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                 )
         except Exception as e:
-            logger.error(f"Ошибка отправки уведомления о запуске: {e}")
+            logger.error(f"Ошибка отправки уведомления: {e}")
 
 async def on_shutdown(bot: Bot) -> None:
     """Действия при остановке бота"""
     await bot.session.close()
-    logger.info("Bot shutdown complete")
+    logger.info("Бот остановлен")
     
-    # Отправляем уведомление о остановке бота
     try:
         async with Bot(token=LOG_BOT_TOKEN) as log_bot:
             await log_bot.send_message(
@@ -136,36 +132,18 @@ async def on_shutdown(bot: Bot) -> None:
                 f"🔴 Бот остановлен\n⏰ Время: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             )
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления о остановке: {e}")
+        logger.error(f"Ошибка отправки уведомления: {e}")
 
 def main() -> None:
-    """Основная функция запуска бота"""
-    try:
-        # Создаем приложение
-        app = web.Application()
-        
-        # Настраиваем вебхук хендлер
-        SimpleRequestHandler(
-            dispatcher=dp,
-            bot=bot,
-        ).register(app, path=WEBHOOK_PATH)
-        
-        # Добавляем маршрут для проверки здоровья
-        app.router.add_get("/", lambda request: web.Response(text="OK"))
-        
-        # Настраиваем хуки запуска и остановки
-        app.on_startup.append(lambda app: on_startup(bot))
-        app.on_shutdown.append(lambda app: on_shutdown(bot))
-        
-        # Получаем порт из переменных окружения
-        port = int(os.getenv("PORT", 8080))
-        
-        # Запускаем приложение
-        web.run_app(app, host="0.0.0.0", port=port)
-        
-    except Exception as e:
-        logger.error(f"Critical error: {e}")
-        sys.exit(1)
+    app = web.Application()
+    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
+    app.router.add_get("/", lambda request: web.Response(text="OK"))
+    
+    app.on_startup.append(lambda app: on_startup(bot))
+    app.on_shutdown.append(lambda app: on_shutdown(bot))
+    
+    port = int(os.getenv("PORT", 10000))  # Порт для Render
+    web.run_app(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
     main()
